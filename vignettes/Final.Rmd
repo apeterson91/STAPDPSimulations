@@ -1,0 +1,168 @@
+---
+title: "Final"
+author: "Adam Peterson"
+date: "3/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(STAPDPSimulations)
+theme_set(theme_bw() + theme(strip.background = element_blank(),
+                             text = element_text(size=25),
+                             panel.spacing = unit(2, "lines")))
+```
+
+
+
+
+```{r}
+ddf <- tibble(Distance = seq(from = 0, to = 1, by = 0.01),
+              Density = dbeta(Distance,1,1),
+              Distribution = "Uniform") %>%
+  rbind(.,tibble(Distance = seq(from = 0, to = 1, by =0.01),
+                 Density = dbeta(Distance,2,1),
+                 Distribution = "Light Skew")) %>% 
+  rbind(.,tibble(Distance = seq(from = 0, to = 1, by =0.01),
+                 Density = dbeta(Distance,1.755,1.031),
+                 Distribution = "CA Skew"))
+p <- ddf %>% ggplot(aes(x=Distance,y=Density,linetype=Distribution)) +
+  geom_line() + theme(legend.title = element_blank(),legend.position = 'bottom')
+ggsave(plot = p,filename ="setup_distributions.pdf",width = 12, height = 8)
+p
+```
+
+
+
+```{r}
+### cluster determined exposure
+
+cluster_functions <- list("Rural"=function(x) .25*pweibull(x,shape=5,scale=.4,lower.tail=FALSE),
+                          "Urban"=function(x) pweibull(x,shape=5,scale=.4,lower.tail=FALSE))
+
+average_dists <- c(15,30,45)
+ddsts <- list("Uniform" =function(x) runif(x),
+              "Light Skew" = function(x) rbeta(x,2,1),
+              "CA Skew" = function(x) rbeta(x,1.755,1.031))
+
+gd <- expand.grid(Number=1:3,Skew=1:3,Skew_two=1:3)
+
+ds_fun <- function(x,a,b,c) {
+  generate_weak_dataset(seed = x,prop_cluster = c(.5,.5),
+                        cluster_function = cluster_functions,
+                        num_distances = list(Rural = average_dists[a],
+                                                  Urban = average_dists[a]),
+                        rdist_generator = list(Rural=ddsts[[b]],
+                                               Urban=ddsts[[c]]),
+                        n = 2E2)}
+
+ss <- purrr::pmap_dfr(list(gd$Number,gd$Skew,gd$Skew_two),
+                      function(a,b,c) {
+                        sim_fit_multiple(num_sim = 25L,
+                                         K = 50L,
+                                         chains = 1L,fix_alpha = T,
+                                         dataset_function = function(x) ds_fun(x,a,b,c)) %>% 
+                          mutate(AverageBEF = average_dists[a], 
+                               Distribution_One = names(ddsts)[b],
+                               Distribution_Two = names(ddsts)[c])}) %>% 
+  mutate(Distribution_One = factor(Distribution_One),
+         Distribution_Two = factor(Distribution_Two))
+                        
+
+```
+
+
+
+```{r}
+mx_ls <- max(ss %>% filter(rhat<=1.1,mnum>1) %>% pull(mn_loss)) ## Remove 6 simulations without convergence or only 1 cluster estimated
+p <- ss %>% 
+  mutate_at(vars(contains("Distribution")),function(x) case_when(x == "CA Skew" ~ "CA",
+                                                                 x == "Light Skew" ~ "Skew",
+                                                                 x == "Uniform" ~ "Uniform")) %>% 
+  mutate(Distribution_One = factor(Distribution_One,levels=c("Uniform","CA","Skew")),
+         Distribution_Two = factor(Distribution_Two,levels=c("Uniform","CA",
+                                                             "Skew"))) %>% 
+  filter(rhat<=1.1,mnum>1) %>%
+  group_by(Distribution_One,
+           Distribution_Two,
+           AverageBEF) %>% 
+  summarise(Mean_loss = mean(mn_loss)/mx_ls,
+            lower_loss = quantile(mn_loss/mx_ls,0.025),
+            upper_loss = quantile(mn_loss/mx_ls,0.975)) %>% 
+  ggplot(aes(x = AverageBEF,
+             y = Mean_loss)) + 
+  geom_point() + geom_line() + 
+  facet_grid(Distribution_One~Distribution_Two) +
+  geom_errorbar(aes(ymin=lower_loss,
+                    ymax=upper_loss),
+                alpha=0.3) + 
+  scale_x_continuous(breaks=c(15,30,45)) +
+  scale_y_continuous(breaks=seq(from = 0,to = 1, by =0.25)) + 
+  ylim(0,1) +
+  ylab("Relative Loss") + 
+  xlab("Number of BEFs")
+```
+
+```{r}
+ggsave(plot = p, filename = "CA_rel_loss.pdf",width = 12,height =8)
+```
+
+```{r}
+
+ddsts <- list("Skew" =function(x) rbeta(x,2,1))
+effect_sizes <- c(0,.25,.5,.75)
+
+
+
+ds_fun <- function(x,ix) {
+  generate_weak_dataset(seed = x,
+                        prop_cluster = c(0.5,.5),
+                        cluster_function = list("Rural"=function(x)
+                          effect_sizes[ix]*pweibull(x,shape=5,scale=.4,lower.tail=F),
+                          "Urban"=function(x) pweibull(x,shape=5,scale=.4,lower.tail=F)),
+                        num_distances = list(Rural = 15,
+                                             Urban = 15),
+                        rdist_generator = list(Rural=ddsts[[1]],
+                                               Urban=ddsts[[1]]),
+                        n = 200)}
+
+ss <- purrr::map_dfr(1:4,
+                      function(y) {
+                        sim_fit_multiple(num_sim = 25L,
+                                         K = 50L ,chains = 1L,
+                                         fix_alpha = T,
+                                         dataset_function = function(x) ds_fun(x,y)) %>% 
+                          mutate(Num_BEF = 15,
+                                 EffectSize = effect_sizes[y])})
+```
+
+
+````{r}
+mx_loss <- ss %>% filter(!is.na(rhat),unum>1) %>% pull(mn_loss) %>% max()
+p <- ss %>% 
+  filter(rhat<1.1,unum>1) %>% 
+  mutate(EffectSize = (1-EffectSize)/1) %>%
+  group_by(EffectSize) %>% 
+  summarise(Loss = median(mn_loss/mx_loss),
+            LowerSe = Loss - 2*sd(mn_loss/mx_loss)/sqrt(n()),
+            UpperSe = Loss + 2*sd(mn_loss/mx_loss)/sqrt(n()),
+            Lower = quantile(mn_loss/mx_loss,0.25),
+            Upper = quantile(mn_loss/mx_loss,0.975)) %>% 
+  ggplot(aes(x=EffectSize,y=Loss)) + 
+  geom_pointrange(aes(ymin=Lower,ymax=Upper)) + 
+  xlab("Difference in Effect Sizes") + 
+  scale_x_continuous(breaks=c(0,.25,.5,.75,1)) + 
+  geom_hline(aes(yintercept = 0),color='red',linetype=2) + 
+  ylab("Relative Loss")
+
+```
+
+
+```{r}
+ggsave(plot = p,filename = "CA_effectsize_loss.pdf",width = 12 , height = 10)
+```
+
