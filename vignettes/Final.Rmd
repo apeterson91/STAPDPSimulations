@@ -26,10 +26,10 @@ ddf <- tibble(Distance = seq(from = 0, to = 1, by = 0.01),
               Distribution = "Uniform") %>%
   rbind(.,tibble(Distance = seq(from = 0, to = 1, by =0.01),
                  Density = dbeta(Distance,2,1),
-                 Distribution = "Light Skew")) %>% 
+                 Distribution = "Skew")) %>% 
   rbind(.,tibble(Distance = seq(from = 0, to = 1, by =0.01),
                  Density = dbeta(Distance,1.755,1.031),
-                 Distribution = "CA Skew"))
+                 Distribution = "CA"))
 p <- ddf %>% ggplot(aes(x=Distance,y=Density,linetype=Distribution)) +
   geom_line() + theme(legend.title = element_blank(),legend.position = 'bottom')
 ggsave(plot = p,filename ="setup_distributions.pdf",width = 12, height = 8)
@@ -78,7 +78,7 @@ ss <- purrr::pmap_dfr(list(gd$Number,gd$Skew,gd$Skew_two),
 
 
 ```{r}
-mx_ls <- max(ss %>% filter(rhat<=1.1,mnum>1) %>% pull(mn_loss)) ## Remove 6 simulations without convergence or only 1 cluster estimated
+mx_ls <- max(ss %>% filter(rhat<=1.1) %>% pull(mn_loss)) ## Remove 6 simulations without convergence or only 1 cluster estimated
 p <- ss %>% 
   mutate_at(vars(contains("Distribution")),function(x) case_when(x == "CA Skew" ~ "CA",
                                                                  x == "Light Skew" ~ "Skew",
@@ -142,7 +142,7 @@ ss <- purrr::map_dfr(1:4,
 
 
 ````{r}
-mx_loss <- ss %>% filter(!is.na(rhat),unum>1) %>% pull(mn_loss) %>% max()
+mx_loss <- ss %>% filter(!is.na(rhat)) %>% pull(mn_loss) %>% max()
 p <- ss %>% 
   filter(rhat<1.1,unum>1) %>% 
   mutate(EffectSize = (1-EffectSize)/1) %>%
